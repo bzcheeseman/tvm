@@ -51,7 +51,7 @@ void OpenCLWorkspace::GetAttr(
 }
 
 void* OpenCLWorkspace::AllocDataSpace(
-    TVMContext ctx, size_t size, size_t alignment) {
+    TVMContext ctx, size_t size, size_t alignment, TVMType type_hint) {
   this->Init();
   CHECK(context != nullptr) << "No OpenCL device";
   cl_int err_code;
@@ -108,7 +108,9 @@ void OpenCLWorkspace::StreamSync(TVMContext ctx, TVMStreamHandle stream) {
   OPENCL_CALL(clFinish(this->GetQueue(ctx)));
 }
 
-void* OpenCLWorkspace::AllocWorkspace(TVMContext ctx, size_t size) {
+void* OpenCLWorkspace::AllocWorkspace(TVMContext ctx,
+                                      size_t size,
+                                      TVMType type_hint) {
   return OpenCLThreadEntry::ThreadLocal()->pool.AllocWorkspace(ctx, size);
 }
 

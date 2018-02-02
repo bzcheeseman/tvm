@@ -31,6 +31,7 @@ inline std::string DeviceName(int type) {
     case kDLMetal: return "metal";
     case kDLVPI: return "vpi";
     case kDLROCM: return "rocm";
+    case kOpenGL: return "opengl";
     case kExtDev: return "ext_dev";
     default: LOG(FATAL) << "unknown type =" << type; return "Unknown";
   }
@@ -94,8 +95,10 @@ DeviceAPI* DeviceAPI::Get(TVMContext ctx, bool allow_missing) {
       static_cast<int>(ctx.device_type), allow_missing);
 }
 
-void* DeviceAPI::AllocWorkspace(TVMContext ctx, size_t size) {
-  return AllocDataSpace(ctx, size, kTempAllocaAlignment);
+void* DeviceAPI::AllocWorkspace(TVMContext ctx,
+                                size_t size,
+                                TVMType type_hint) {
+  return AllocDataSpace(ctx, size, kTempAllocaAlignment, type_hint);
 }
 
 void DeviceAPI::FreeWorkspace(TVMContext ctx, void* ptr) {
@@ -218,12 +221,22 @@ int TVMBackendGetFuncFromEnv(void* mod_node,
 }
 
 void* TVMBackendAllocWorkspace(int device_type,
-                             int device_id,
-                             uint64_t size) {
+                               int device_id,
+                               uint64_t size,
+                               int dtype_code_hint,
+                               int dtype_bits_hint) {
   TVMContext ctx;
   ctx.device_type = static_cast<DLDeviceType>(device_type);
   ctx.device_id = device_id;
-  return DeviceAPIManager::Get(ctx)->AllocWorkspace(ctx, static_cast<size_t>(size));
+
+  TVMType type_hint;
+  type_hint.code = static_cast<decltype(type_hint.code)>(dtype_code_hint);
+  type_hint.bits = static_cast<decltype(type_hint.bits)>(dtype_bits_hint);
+  type_hint.lanes = 1;
+
+  return DeviceAPIManager::Get(ctx)->AllocWorkspace(ctx,
+                                                    static_cast<size_t>(size),
+                                                    type_hint);
 }
 
 int TVMBackendFreeWorkspace(int device_type,
@@ -365,7 +378,7 @@ int TVMArrayAlloc(const tvm_index_t* shape,
   size_t size = GetDataSize(arr);
   size_t alignment = GetDataAlignment(arr);
   arr->data = DeviceAPIManager::Get(arr->ctx)->AllocDataSpace(
-      arr->ctx, size, alignment);
+      arr->ctx, size, alignment, arr->dtype);
   *out = arr;
   API_END_HANDLE_ERROR(TVMArrayFree_(arr));
 }

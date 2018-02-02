@@ -27,13 +27,14 @@ LLVM_CFLAGS= -fno-rtti -DDMLC_ENABLE_RTTI=0 -DDMLC_USE_FOPEN64=0
 LDFLAGS = -pthread -lm -ldl
 INCLUDE_FLAGS = -Iinclude -I$(DLPACK_PATH)/include -I$(DMLC_CORE_PATH)/include -IHalideIR/src -Itopi/include
 CFLAGS = -std=c++11 -Wall -O2 $(INCLUDE_FLAGS) -fPIC
+PKG_LDFLAGS =
 FRAMEWORKS =
 OBJCFLAGS = -fno-objc-arc
 EMCC_FLAGS= -std=c++11 -DDMLC_LOG_STACK_TRACE=0\
 	-Oz -s RESERVED_FUNCTION_POINTERS=2 -s MAIN_MODULE=1 -s NO_EXIT_RUNTIME=1\
 	-s EXTRA_EXPORTED_RUNTIME_METHODS="['cwrap','getValue','setValue','addFunction']"\
+	-s USE_GLFW=3 -s USE_WEBGL2=1 -lglfw\
 	$(INCLUDE_FLAGS)
-
 # llvm configuration
 ifdef LLVM_CONFIG
 	LLVM_VERSION=$(shell $(LLVM_CONFIG) --version| cut -b 1,3)
@@ -54,9 +55,11 @@ METAL_SRC = $(wildcard src/runtime/metal/*.mm)
 CUDA_SRC = $(wildcard src/runtime/cuda/*.cc)
 ROCM_SRC = $(wildcard src/runtime/rocm/*.cc)
 OPENCL_SRC = $(wildcard src/runtime/opencl/*.cc)
+OPENGL_SRC = $(wildcard src/runtime/opengl/*.cc)
 RPC_SRC = $(wildcard src/runtime/rpc/*.cc)
 GRAPH_SRC = $(wildcard src/runtime/graph/*.cc)
 RUNTIME_SRC = $(wildcard src/runtime/*.cc)
+TOPI_SRC = $(wildcard topi/src/*.cc)
 
 # Objectives
 LLVM_BUILD = build/llvm${LLVM_VERSION}
@@ -65,15 +68,22 @@ METAL_OBJ = $(patsubst src/%.mm, build/%.o, $(METAL_SRC))
 CUDA_OBJ = $(patsubst src/%.cc, build/%.o, $(CUDA_SRC))
 ROCM_OBJ = $(patsubst src/%.cc, build/%.o, $(ROCM_SRC))
 OPENCL_OBJ = $(patsubst src/%.cc, build/%.o, $(OPENCL_SRC))
+OPENGL_OBJ = $(patsubst src/%.cc, build/%.o, $(OPENGL_SRC))
 RPC_OBJ = $(patsubst src/%.cc, build/%.o, $(RPC_SRC))
 GRAPH_OBJ = $(patsubst src/%.cc, build/%.o, $(GRAPH_SRC))
 CC_OBJ = $(patsubst src/%.cc, build/%.o, $(CC_SRC)) $(LLVM_OBJ)
 RUNTIME_OBJ = $(patsubst src/%.cc, build/%.o, $(RUNTIME_SRC))
+TOPI_OBJ = $(patsubst topi/%.cc, build/%.o, $(TOPI_SRC))
 CONTRIB_OBJ =
 
 # Deps
 ALL_DEP = $(CC_OBJ) $(CONTRIB_OBJ) $(LIB_HALIDEIR)
 RUNTIME_DEP = $(RUNTIME_OBJ)
+TOPI_DEP = $(TOPI_OBJ)
+
+ifeq ($(UNAME_S), Darwin)
+	PKG_LDFLAGS += -undefined dynamic_lookup
+endif
 
 # Dependency specific rules
 ifdef CUDA_PATH
@@ -119,6 +129,19 @@ else
 	CFLAGS += -DTVM_OPENCL_RUNTIME=0
 endif
 
+ifeq ($(USE_OPENGL), 1)
+	CFLAGS += -DTVM_OPENGL_RUNTIME=1
+	EMCC_FLAGS += -DTVM_OPENGL_RUNTIME=1
+	ifeq ($(UNAME_S), Darwin)
+		FRAMEWORKS += -framework OpenGL
+	else
+		LDFLAGS += -lGL -lglfw
+	endif
+	RUNTIME_DEP += $(OPENGL_OBJ)
+else
+	CFLAGS += -DTVM_OPENGL_RUNTIME=0
+endif
+
 ifeq ($(USE_METAL), 1)
 	CFLAGS += -DTVM_METAL_RUNTIME=1
 	LDFLAGS += -lobjc
@@ -134,6 +157,10 @@ endif
 
 ifeq ($(USE_GRAPH_RUNTIME), 1)
 	RUNTIME_DEP += $(GRAPH_OBJ)
+endif
+
+ifeq ($(USE_GRAPH_RUNTIME_DEBUG), 1)
+	CFLAGS += -DTVM_GRAPH_RUNTIME_DEBUG
 endif
 
 include make/contrib/cblas.mk
@@ -179,10 +206,14 @@ else
 	JVM_PKG_PROFILE := $(JVM_PKG_PROFILE)-cpu
 endif
 
-BUILD_TARGETS ?= lib/libtvm.$(SHARED_LIBRARY_SUFFIX) lib/libtvm_runtime.$(SHARED_LIBRARY_SUFFIX)
+BUILD_TARGETS ?= lib/libtvm.$(SHARED_LIBRARY_SUFFIX) \
+	lib/libtvm_runtime.$(SHARED_LIBRARY_SUFFIX) \
+  lib/libtvm_topi.$(SHARED_LIBRARY_SUFFIX)
+
 all: ${BUILD_TARGETS}
 runtime: lib/libtvm_runtime.$(SHARED_LIBRARY_SUFFIX)
 web: lib/libtvm_web_runtime.js lib/libtvm_web_runtime.bc
+topi: lib/libtvm_topi.$(SHARED_LIBRARY_SUFFIX)
 
 include tests/cpp/unittest.mk
 
@@ -207,21 +238,23 @@ build/%.o: src/%.cc
 	$(CXX) $(CFLAGS) -MM -MT build/$*.o $< >build/$*.d
 	$(CXX) -c $(CFLAGS) -c $< -o $@
 
-lib/libtvm.dylib: $(ALL_DEP) $(RUNTIME_DEP)
+build/src/%.o: topi/src/%.cc
+	@mkdir -p $(@D)
+	$(CXX) $(CFLAGS) -MM -MT build/src/$*.o $< >build/src/$*.d
+	$(CXX) -c $(CFLAGS) -c $< -o $@
+
+lib/libtvm.${SHARED_LIBRARY_SUFFIX}: $(ALL_DEP) $(RUNTIME_DEP)
 	@mkdir -p $(@D)
 	$(CXX) $(CFLAGS) $(FRAMEWORKS) -shared -o $@ $(filter %.o %.a, $^) $(LDFLAGS)
 
-lib/libtvm_runtime.dylib: $(RUNTIME_DEP)
+lib/libtvm_topi.${SHARED_LIBRARY_SUFFIX}: $(TOPI_DEP)
+	@mkdir -p $(@D)
+	$(CXX) $(CFLAGS) $(FRAMEWORKS) -shared -o $@ $(filter %.o %.a, $^) $(LDFLAGS) $(PKG_LDFLAGS)
+
+lib/libtvm_runtime.${SHARED_LIBRARY_SUFFIX}: $(RUNTIME_DEP)
 	@mkdir -p $(@D)
 	$(CXX) $(CFLAGS) $(FRAMEWORKS) -shared -o $@ $(filter %.o %.a, $^) $(LDFLAGS)
 
-lib/libtvm.so: $(ALL_DEP) $(RUNTIME_DEP)
-	@mkdir -p $(@D)
-	$(CXX) $(CFLAGS) $(FRAMEWORKS) -shared -o $@ $(filter %.o %.a, $^) $(LDFLAGS)
-
-lib/libtvm_runtime.so: $(RUNTIME_DEP)
-	@mkdir -p $(@D)
-	$(CXX) $(CFLAGS) $(FRAMEWORKS) -shared -o $@ $(filter %.o %.a, $^) $(LDFLAGS)
 
 lib/libtvm_web_runtime.bc: web/web_runtime.cc
 	@mkdir -p build/web

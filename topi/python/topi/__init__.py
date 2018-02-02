@@ -9,6 +9,8 @@ specific workload.
 """
 from __future__ import absolute_import as _abs
 
+from tvm._ffi.libinfo import __version__
+
 from .math import *
 from .reduction import *
 from .transform import *
@@ -17,6 +19,8 @@ from . import nn
 from . import x86
 from . import cuda
 from . import rasp
+from . import mali
 from . import testing
 from . import util
 from . import rocm
+from . import cpp

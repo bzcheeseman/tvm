@@ -123,12 +123,12 @@ void MetalWorkspace::SetDevice(TVMContext ctx) {
 }
 
 void* MetalWorkspace::AllocDataSpace(
-    TVMContext ctx, size_t size, size_t alignment) {
+    TVMContext ctx, size_t nbytes, size_t alignment, TVMType type_hint) {
   this->Init();
   id<MTLDevice> dev = GetDevice(ctx);
   // allocate buffer in GPU only mode.
   id<MTLBuffer> buf = [
-      dev newBufferWithLength:size
+      dev newBufferWithLength:nbytes
           options:MTLResourceStorageModePrivate];
   CHECK(buf != nil);
   return (__bridge void*)([buf retain]);
@@ -228,7 +228,9 @@ void MetalWorkspace::StreamSync(TVMContext ctx, TVMStreamHandle stream) {
   [cb waitUntilCompleted];
 }
 
-void* MetalWorkspace::AllocWorkspace(TVMContext ctx, size_t size) {
+void* MetalWorkspace::AllocWorkspace(TVMContext ctx,
+                                     size_t size,
+                                     TVMType type_hint) {
   return MetalThreadEntry::ThreadLocal()->pool.AllocWorkspace(ctx, size);
 }
 
